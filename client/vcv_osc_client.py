@@ -10,7 +10,8 @@ osc-bridge, prefix every address with `/vcv` (the bridge strips it); when you
 talk to the module directly (as this script does), use the bare addresses.
 
 Usage:
-    python vcv_osc_client.py dump
+    python vcv_osc_client.py dump [includeParams=1] [includePorts=1]
+    python vcv_osc_client.py registry                            # list installed modules
     python vcv_osc_client.py set <moduleId> <paramId> <value>
     python vcv_osc_client.py get <moduleId> <paramId>
     python vcv_osc_client.py press <moduleId> <paramId>          # momentary 1 then 0
@@ -69,9 +70,14 @@ def main():
     cmd, args = a.cmd, a.args
 
     if cmd == "dump":
-        include_params = int(args[0]) if args else 1
-        send("/state/dump", include_params)
-        time.sleep(1.0)
+        include_params = int(args[0]) if len(args) > 0 else 1
+        include_ports = int(args[1]) if len(args) > 1 else 1
+        send("/state/dump", include_params, include_ports)
+        time.sleep(1.5)
+
+    elif cmd == "registry":
+        send("/registry/dump")
+        time.sleep(1.5)
 
     elif cmd == "set":
         mod, param, val = int(args[0]), int(args[1]), float(args[2])

@@ -91,7 +91,8 @@ Replies are sent to the reply host:port (default `127.0.0.1:7771`).
 | `/cable/add`    | `outMod:int outPort:int inMod:int inPort:int` | Add a cable. → `/cable/added` or `/error`. |
 | `/cable/remove` | `inMod:int inPort:int`                 | Remove the cable feeding that input. → `/cable/removed`. |
 | `/cable/remove_id` | `cableId:int`                       | Remove a cable by id. |
-| `/state/dump`   | `[includeParams:int=1]`                | Emit the whole patch (see below). |
+| `/state/dump`   | `[includeParams:int=1] [includePorts:int=1]` | Emit the whole patch (see below). |
+| `/registry/dump`| –                                       | List every installed module (module-level, no ports). |
 | `/ping`         | –                                       | → `/pong`. |
 
 ### Outgoing (module → client, on the reply port)
@@ -101,15 +102,33 @@ Replies are sent to the reply host:port (default `127.0.0.1:7771`).
 | `/param/value`  | `moduleId paramId value` |
 | `/cable/added`  | `cableId outMod outPort inMod inPort` |
 | `/cable/removed`| `cableId [inMod inPort]` |
-| `/state/module` | `moduleId pluginSlug modelSlug numParams numInputs numOutputs x y` |
-| `/state/param`  | `moduleId paramId value min max label` |
+| `/state/module` | `moduleId pluginSlug modelSlug numParams numInputs numOutputs x y modelName description` |
+| `/state/param`  | `moduleId paramId value min max label unit description` |
+| `/state/input`  | `moduleId portId name description` |
+| `/state/output` | `moduleId portId name description` |
 | `/state/cable`  | `cableId outMod outPort inMod inPort` |
 | `/state/done`   | `numModules numCables` |
+| `/registry/model` | `pluginSlug modelSlug name description` |
+| `/registry/done`| `count` |
 | `/pong`         | – |
 | `/error`        | `message:string` |
 
 Module and port ids come from `/state/dump`. The OSC Controller module itself
 appears in the dump like any other module.
+
+### Naming & typing of I/O
+
+VCV ports carry no signal *type* (gate / CV / audio) — every port is the same
+±10 V polyphonic voltage. A port's meaning lives entirely in its **name** and
+**description**, which `/state/input` and `/state/output` expose (the
+description is the module author's "comment"). Parameters likewise expose
+`label`, `unit` and `description`.
+
+There is **no static catalogue** of every module's I/O: a module's ports and
+params only exist once it is instantiated. `/registry/dump` lists every
+*installed* module at the module level (slug, name, one-line description);
+`/state/dump` gives the full per-port / per-param detail for the modules
+actually in the open patch.
 
 ---
 

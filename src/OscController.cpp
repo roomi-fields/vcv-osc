@@ -124,6 +124,7 @@ struct OscController : Module {
 		else if (addr == "/cable/remove") applyCableRemove(msg);
 		else if (addr == "/cable/remove_id") applyCableRemoveId(msg);
 		else if (addr == "/state/dump")  applyStateDump(msg);
+		else if (addr == "/registry/dump") applyRegistryDump(msg);
 		else if (addr == "/ping")        reply(OscMessage("/pong"));
 		else sendError("unknown address: " + addr);
 	}
@@ -325,8 +326,17 @@ struct OscController : Module {
 	}
 
 	// ----------------------------------------------------------- 3. STATE dump
+	// /state/dump [includeParams=1] [includePorts=1]
+	//   → /state/module <id> <pluginSlug> <modelSlug> <numParams> <numInputs>
+	//                    <numOutputs> <x> <y> <modelName> <description>
+	//   → /state/param  <id> <paramId> <value> <min> <max> <label> <unit> <desc>
+	//   → /state/input  <id> <portId> <name> <description>
+	//   → /state/output <id> <portId> <name> <description>
+	//   → /state/cable  <cableId> <outMod> <outPort> <inMod> <inPort>
+	//   → /state/done   <numModules> <numCables>
 	void applyStateDump(const OscMessage& m) {
-		bool includeParams = m.args.empty() ? true : (m.args[0].asInt() != 0);
+		bool includeParams = m.args.size() < 1 ? true : (m.args[0].asInt() != 0);
+		bool includePorts  = m.args.size() < 2 ? true : (m.args[1].asInt() != 0);
 
 		app::RackWidget* rack = APP->scene->rack;
 
@@ -335,9 +345,9 @@ struct OscController : Module {
 		for (int64_t id : moduleIds) {
 			engine::Module* mod = APP->engine->getModule(id);
 			if (!mod) continue;
-			std::string pluginSlug = mod->getModel() && mod->getModel()->plugin
-				? mod->getModel()->plugin->slug : "?";
-			std::string modelSlug = mod->getModel() ? mod->getModel()->slug : "?";
+			plugin::Model* model = mod->getModel();
+			std::string pluginSlug = (model && model->plugin) ? model->plugin->slug : "?";
+			std::string modelSlug = model ? model->slug : "?";
 
 			math::Vec pos(0, 0);
 			if (app::ModuleWidget* mw = rack->getModule(id))
@@ -352,6 +362,8 @@ struct OscController : Module {
 			out.pushInt((int32_t) mod->getNumOutputs());
 			out.pushFloat(pos.x);
 			out.pushFloat(pos.y);
+			out.pushString(model ? model->name : "");        // human-readable name
+			out.pushString(model ? model->description : ""); // one-line "comment"
 			reply(out);
 
 			if (includeParams) {
@@ -363,8 +375,33 @@ struct OscController : Module {
 					pm.pushFloat(APP->engine->getParamValue(mod, p));
 					pm.pushFloat(pq ? pq->getMinValue() : 0.f);
 					pm.pushFloat(pq ? pq->getMaxValue() : 1.f);
-					pm.pushString(pq ? pq->getLabel() : "");
+					pm.pushString(pq ? pq->getLabel() : "");        // name
+					pm.pushString(pq ? pq->getUnit() : "");         // e.g. " Hz", " V", "%"
+					pm.pushString(pq ? pq->getDescription() : "");  // the "comment"
 					reply(pm);
+				}
+			}
+
+			// Named + described I/O. VCV ports carry no signal "type" (all ports
+			// are ±10 V polyphonic voltage); their meaning lives in name/desc.
+			if (includePorts) {
+				for (int i = 0; i < mod->getNumInputs(); i++) {
+					engine::PortInfo* pi = mod->getInputInfo(i);
+					OscMessage im("/state/input");
+					im.pushInt((int32_t) id);
+					im.pushInt(i);
+					im.pushString(pi ? pi->getName() : "");
+					im.pushString(pi ? pi->getDescription() : "");
+					reply(im);
+				}
+				for (int o = 0; o < mod->getNumOutputs(); o++) {
+					engine::PortInfo* po = mod->getOutputInfo(o);
+					OscMessage om("/state/output");
+					om.pushInt((int32_t) id);
+					om.pushInt(o);
+					om.pushString(po ? po->getName() : "");
+					om.pushString(po ? po->getDescription() : "");
+					reply(om);
 				}
 			}
 		}
@@ -386,6 +423,31 @@ struct OscController : Module {
 		OscMessage done("/state/done");
 		done.pushInt((int32_t) moduleIds.size());
 		done.pushInt((int32_t) cableIds.size());
+		reply(done);
+	}
+
+	// ------------------------------------------------- catalogue of installed
+	// modules (module-level only — port/param names are unknown until a module
+	// is instantiated, so this lists what CAN be added, not their I/O).
+	// /registry/dump → /registry/model <pluginSlug> <modelSlug> <name> <desc>
+	//                → /registry/done <count>
+	void applyRegistryDump(const OscMessage&) {
+		int count = 0;
+		for (plugin::Plugin* p : plugin::plugins) {
+			if (!p) continue;
+			for (plugin::Model* model : p->models) {
+				if (!model || model->hidden) continue;
+				OscMessage out("/registry/model");
+				out.pushString(p->slug);
+				out.pushString(model->slug);
+				out.pushString(model->name);
+				out.pushString(model->description);
+				reply(out);
+				count++;
+			}
+		}
+		OscMessage done("/registry/done");
+		done.pushInt(count);
 		reply(done);
 	}
 
