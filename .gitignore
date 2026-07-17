@@ -1,0 +1,16 @@
+# Build artifacts
+/build/
+/dist/
+plugin.so
+plugin.dylib
+plugin.dll
+*.o
+*.d
+
+# Packaged plugin
+*.vcvplugin
+
+# Local tooling (RTFM index, editor/assistant config)
+/.rtfm/
+/CLAUDE.md
+/.claude/
