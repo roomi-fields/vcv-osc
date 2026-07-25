@@ -1,9 +1,9 @@
 {
-  "slug": "vcv-osc",
-  "name": "vcv-osc",
-  "version": "2.1.1",
+  "slug": "RoomiFields",
+  "name": "Roomi Fields",
+  "version": "2.1.2",
   "license": "GPL-3.0-or-later",
-  "brand": "roomi-fields",
+  "brand": "Roomi Fields",
   "author": "roomi-fields",
   "authorEmail": "claude@liance.art",
   "authorUrl": "https://github.com/roomi-fields",

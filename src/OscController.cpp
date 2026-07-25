@@ -922,7 +922,7 @@ struct OscController : Module {
 	// Open Stage Control to auto-generate a labelled, correctly-ranged surface.
 	// Built on the UI thread; the string is cached for the HTTP thread.
 	void rebuildOscQuery() {
-		json_t* root = makeContainer("/", "vcv-osc — live VCV Rack patch");
+		json_t* root = makeContainer("/", "OSC Controller — live VCV Rack patch");
 		json_t* rootContents = json_object_get(root, "CONTENTS");
 
 		json_t* paramC = makeContainer("/param", "Module parameters (read/write)");
@@ -991,7 +991,7 @@ struct OscController : Module {
 		// HOST_INFO: tells the client where the actual OSC (UDP) endpoint is.
 		if (query.find("HOST_INFO") != std::string::npos) {
 			json_t* h = json_object();
-			json_object_set_new(h, "NAME", json_string("vcv-osc"));
+			json_object_set_new(h, "NAME", json_string("Roomi Fields OSC Controller"));
 			json_object_set_new(h, "OSC_PORT", json_integer(listenPort));
 			json_object_set_new(h, "OSC_TRANSPORT", json_string("UDP"));
 			json_t* ext = json_object();

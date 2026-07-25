@@ -321,9 +321,9 @@ platform-specific code is the socket wrappers (`src/osc/UdpSocket.cpp`,
 
 Copy the built plugin folder into your Rack user directory:
 
-- Linux: `~/.local/share/Rack2/plugins-lin-x64/vcv-osc/`
-- macOS: `~/Library/Application Support/Rack2/plugins-mac-<arch>/vcv-osc/`
-- Windows: `%LOCALAPPDATA%\Rack2\plugins-win-x64\vcv-osc\`
+- Linux: `~/.local/share/Rack2/plugins-lin-x64/RoomiFields/`
+- macOS: `~/Library/Application Support/Rack2/plugins-mac-<arch>/RoomiFields/`
+- Windows: `%LOCALAPPDATA%\Rack2\plugins-win-x64\RoomiFields\`
 
 `make install` does this for you.
 
