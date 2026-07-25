@@ -5,10 +5,14 @@ an external OSC client. Drop the **OSC Controller** module into any patch and
 you can, from Python / [osc-bridge](https://github.com/roomi-fields/osc-bridge)
 / Max / a shell script:
 
-- **set / get any parameter** of any module (knobs, buttons, switches);
+- **set / get any parameter** of any module (knobs, buttons, switches), by
+  numeric id **or by name** (`"Fundamental/VCO"` / `"Frequency"`);
 - **add / remove cables** between any two ports;
-- **dump the full patch state** (modules, params, cables);
-- **subscribe** to parameter changes for bidirectional control (bonus).
+- **add / remove modules** and load / save their presets;
+- **dump the full patch state** (modules, params, cables, named I/O);
+- **subscribe** to parameter *and* structural (module/cable) changes;
+- **auto-build a control surface** in TouchOSC / Open Stage Control via a served
+  [OSCQuery](https://github.com/Vidvox/OSCQueryProposal) namespace.
 
 It is **wire-compatible with osc-bridge's passthrough surface**: the bridge
 strips its `/vcv` prefix and forwards to UDP 7770, replies come back on 7771 —
@@ -26,13 +30,15 @@ Two very different reliability tiers, kept strictly separated in the code:
 
 | Feature  | Rack API used                     | Stability |
 |----------|-----------------------------------|-----------|
-| Params   | `engine::Engine` (`setParamValue`/`getParamValue`, `getModule`) | **Public, stable.** |
+| Params / state dump / OSCQuery | `engine::Engine` (`setParamValue`/`getParamValue`, `getModule`, `getModuleIds`) | **Public, stable.** |
 | Cables   | `app::RackWidget` / `CableWidget` / `PortWidget` | **Unofficial, may break between Rack versions.** |
+| Module add/remove, presets | `app::RackWidget` / `ModuleWidget` / `plugin::getModel` | **Unofficial, may break between Rack versions.** |
 
-The cable code is quarantined in three methods (`applyCableAdd/Remove/RemoveId`
-in `src/OscController.cpp`) whose logic is copied verbatim from Rack 2.6.1's own
-source (`RackWidget.cpp`, `PortWidget.cpp`). If a future Rack breaks it, that is
-the one place to fix. See [§ Fragility](#fragility-of-the-cable-api).
+The fragile app-layer code is quarantined in the `applyCable*` and `applyModule*`
+/ `applyPreset*` methods of `src/OscController.cpp`, whose logic follows Rack
+2.6.1's own source. If a future Rack breaks it, that is the one place to fix; the
+stable engine features (params, dump, OSCQuery, watch) keep working regardless.
+See [§ Fragility](#fragility-of-the-cable-api).
 
 ---
 
@@ -63,12 +69,16 @@ Four separated layers, as the threading model demands:
 - **`src/osc/OscSender.hpp`** + **`OscMessage.hpp`** — a send-only socket and a
   dependency-free OSC 1.0 codec (int32 / float32 / string, plus bundle
   unpacking). No oscpack / liblo needed.
+- **`src/osc/HttpServer.{hpp,cpp}`** — a minimal HTTP server on its own thread,
+  serving the OSCQuery namespace. It only reads a cached JSON string that the UI
+  thread rebuilds; it **never touches Rack** directly.
 
 ### Threading, explicitly
 
 The audio thread (`process()`) does nothing but decay the two activity LEDs.
-The network thread only enqueues. All engine and app reads/writes happen on the
-UI thread. The receive loop uses a 200 ms socket timeout to poll its stop flag,
+The network and HTTP threads only read/enqueue. All engine and app reads/writes
+happen on the UI thread — the OSCQuery JSON is built there and handed to the HTTP
+thread as a string behind a mutex. The receive loop uses a 200 ms socket timeout to poll its stop flag,
 because closing a socket does **not** reliably interrupt a blocked `recvfrom()`
 on Linux — without that, removing the module would hang Rack. (Found and fixed
 via the end-to-end test in `test/`.)
@@ -91,9 +101,18 @@ Replies are sent to the reply host:port (default `127.0.0.1:7771`).
 | `/cable/add`    | `outMod:int outPort:int inMod:int inPort:int` | Add a cable. → `/cable/added` or `/error`. |
 | `/cable/remove` | `inMod:int inPort:int`                 | Remove the cable feeding that input. → `/cable/removed`. |
 | `/cable/remove_id` | `cableId:int`                       | Remove a cable by id. |
+| `/module/add`   | `pluginSlug:str modelSlug:str [x:float y:float]` | Instantiate a module. → `/module/added`. |
+| `/module/remove`| `module`                                | Delete a module (and its cables). → `/module/removed`. |
+| `/module/preset_save` | `module path:str`                 | Save the module's preset to a file. |
+| `/module/preset_load` | `module path:str`                 | Load a preset file into the module (undoable). |
+| `/param/<moduleId>/<paramId>` | `[value:float]`           | RESTful per-address set (with arg) / get (OSCQuery form). |
 | `/state/dump`   | `[includeParams:int=1] [includePorts:int=1]` | Emit the whole patch (see below). |
+| `/state/watch`  | `[on:int=1]`                            | Subscribe to structural changes → `/event/*`. |
 | `/registry/dump`| –                                       | List every installed module (module-level, no ports). |
 | `/ping`         | –                                       | → `/pong`. |
+
+Every `moduleId` / `paramId` / `portId` above accepts **either** a numeric id
+**or** a name string — see [Symbolic addressing](#symbolic-addressing).
 
 ### Outgoing (module → client, on the reply port)
 
@@ -102,6 +121,10 @@ Replies are sent to the reply host:port (default `127.0.0.1:7771`).
 | `/param/value`  | `moduleId paramId value` |
 | `/cable/added`  | `cableId outMod outPort inMod inPort` |
 | `/cable/removed`| `cableId [inMod inPort]` |
+| `/module/added` | `moduleId pluginSlug modelSlug` |
+| `/module/removed`| `moduleId` |
+| `/module/preset_saved` | `moduleId path` |
+| `/module/preset_loaded`| `moduleId path` |
 | `/state/module` | `moduleId pluginSlug modelSlug numParams numInputs numOutputs x y modelName description` |
 | `/state/param`  | `moduleId paramId value min max label unit description` |
 | `/state/input`  | `moduleId portId name description` |
@@ -110,11 +133,72 @@ Replies are sent to the reply host:port (default `127.0.0.1:7771`).
 | `/state/done`   | `numModules numCables` |
 | `/registry/model` | `pluginSlug modelSlug name description` |
 | `/registry/done`| `count` |
+| `/event/module_add`   | `moduleId pluginSlug modelSlug` |
+| `/event/module_remove`| `moduleId` |
+| `/event/cable_add`    | `cableId outMod outPort inMod inPort` |
+| `/event/cable_remove` | `cableId` |
 | `/pong`         | – |
 | `/error`        | `message:string` |
 
 Module and port ids come from `/state/dump`. The OSC Controller module itself
-appears in the dump like any other module.
+appears in the dump like any other module. The `/event/*` messages are only
+sent after `/state/watch 1`.
+
+### Symbolic addressing
+
+Numeric ids are canonical but fragile: they only stay valid as long as the
+patch is not rebuilt, and they are unreadable in a performance mapping. So
+**anywhere an id is expected you may send a name string instead** (the module
+branches on the OSC argument *type* — an `int` is an id, a `string` is a name):
+
+| Ref | String form | Example |
+|---|---|---|
+| Module | `modelSlug` or `pluginSlug/modelSlug`, optional `:N` for the Nth instance | `"VCO"`, `"Fundamental/VCO"`, `"VCO:1"` |
+| Param  | the knob **label**, case-insensitive (exact, else first substring) | `"Frequency"` |
+| Port   | the **port name**, case-insensitive | `"Sine"`, `"Pitch"` |
+
+```bash
+python client/vcv_osc_client.py set "Fundamental/VCO" "Frequency" 0.5
+python client/vcv_osc_client.py cable-add "VCO" "Sine" "VCF" "Audio"
+```
+
+Names come straight from `/state/dump` (`modelSlug`, param `label`, port
+`name`), so a client can discover them once and then address by name forever.
+This is the one axis where vcv-osc is strictly more robust than id-only control
+surfaces.
+
+### OSCQuery discovery (auto-build a control surface)
+
+The module also serves an [**OSCQuery**](https://github.com/Vidvox/OSCQueryProposal)
+namespace over HTTP (default port **7772**). OSCQuery is the standard by which a
+controller — **TouchOSC**, **Open Stage Control**, Vezér, Max — discovers an OSC
+device and auto-generates a labelled, correctly-ranged surface. Point it at
+`http://<rack-host>:7772/` and every module parameter appears as a fader with
+its real name and range — no manual mapping.
+
+The namespace exposes each param as a read/write leaf:
+
+```
+GET http://127.0.0.1:7772/            → full namespace tree (JSON)
+GET http://127.0.0.1:7772/?HOST_INFO  → { NAME, OSC_PORT: 7770, OSC_TRANSPORT: "UDP", … }
+GET http://127.0.0.1:7772/param/12    → just module 12's params
+
+/param/<moduleId>/<paramId>  →  { "TYPE":"f", "ACCESS":3,
+                                  "RANGE":[{"MIN":…,"MAX":…}], "VALUE":[…],
+                                  "DESCRIPTION":"Frequency" }
+```
+
+Those leaf addresses are also live **OSC** addresses: send a float to
+`/param/12/0` (UDP 7770) to set that param — the RESTful form OSCQuery clients
+use, alongside the verb form `/param/set 12 0 <value>`. Inspect the tree from
+the shell:
+
+```bash
+python client/vcv_osc_client.py oscquery         # print the namespace + HOST_INFO
+python client/vcv_osc_client.py addr 12 0 0.8    # set via /param/12/0
+```
+
+Enable/disable it and pick the port from the module's right-click menu.
 
 ### Naming & typing of I/O
 
@@ -225,6 +309,21 @@ bash test/run.sh          # prints RESULT: PASS
 ```
 
 ---
+
+## Security
+
+This module is an **unauthenticated remote-control surface**. Anyone who can
+reach its ports can drive the patch. Specifically:
+
+- The OSC server (UDP 7770) and the OSCQuery HTTP server (TCP 7772) bind on
+  **all interfaces** — deliberately, so a phone/tablet running TouchOSC can
+  reach Rack over the LAN. There is no password.
+- `/module/preset_load` and `/module/preset_save` **read and write files by
+  path** on the machine running Rack.
+
+This is fine on `localhost` or a trusted studio LAN (the intended use). On an
+untrusted network, firewall ports 7770/7772 or simply don't add the module.
+Everything is off when no OSC Controller module is in the patch.
 
 ## Fragility of the cable API
 

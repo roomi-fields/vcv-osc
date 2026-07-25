@@ -1,7 +1,7 @@
 {
   "slug": "vcv-osc",
   "name": "vcv-osc",
-  "version": "2.0.1",
+  "version": "2.1.0",
   "license": "GPL-3.0-or-later",
   "brand": "roomi-fields",
   "author": "roomi-fields",
@@ -15,7 +15,7 @@
     {
       "slug": "OscController",
       "name": "OSC Controller",
-      "description": "Remote-controls the whole Rack patch over OSC: set/get any parameter, add/remove cables, dump patch state. Passthrough-compatible with osc-bridge.",
+      "description": "Remote-controls the whole Rack patch over OSC: set/get any parameter (by id or name), add/remove cables and modules, load/save presets, dump patch state, and serve an OSCQuery namespace for TouchOSC/Open Stage Control. Passthrough-compatible with osc-bridge.",
       "manualUrl": "https://github.com/roomi-fields/vcv-osc/blob/main/README.md",
       "tags": [
         "Controller",
