@@ -4,27 +4,22 @@
 [![Latest release](https://img.shields.io/github/v/release/roomi-fields/vcv-osc)](https://github.com/roomi-fields/vcv-osc/releases)
 [![VCV Library](https://img.shields.io/badge/VCV%20Library-submitted-orange.svg)](https://github.com/VCVRack/library/issues/938)
 
-> Drop the **OSC Controller** module into any patch and drive the *entire* patch
-> from TouchOSC, Open Stage Control, Max, a Python script, or
-> [osc-bridge](https://github.com/roomi-fields/osc-bridge) — every knob, cable
-> and module, addressed **by name**, with the whole surface **auto-discovered**.
+**Drive an entire VCV Rack patch over OSC — every parameter, cable and module,
+addressed by name.** Drop the *OSC Controller* module into any patch and control
+it from TouchOSC, Open Stage Control, Max, a Python script, or
+[osc-bridge](https://github.com/roomi-fields/osc-bridge).
 
-<!-- Hero GIF goes here. Record "point TouchOSC at Rack → faders build themselves"
-     and drop it at docs/demo.gif, then uncomment:
-![vcv-osc auto-builds a TouchOSC control surface via OSCQuery](docs/demo.gif)
--->
+![vcv-osc — OSC controllers (TouchOSC, Max / Python, osc-bridge) drive the OSC Controller module inside a Rack patch; it sets parameters and patches cables and modules, while values and change-events flow back](docs/demo/vcv-osc-demo.png)
 
-## The 30-second wow: a control surface that builds itself
+## Point a controller at it — no mapping
 
-vcv-osc serves an [**OSCQuery**](https://github.com/Vidvox/OSCQueryProposal)
-description of your live patch over HTTP. Point **TouchOSC** or **Open Stage
-Control** at `http://<rack-host>:7772/` and **every parameter of every module
-appears as a labelled, correctly-ranged fader — no manual mapping.** Turn a
-fader on your phone, the knob moves in Rack.
+vcv-osc serves an [OSCQuery](https://github.com/Vidvox/OSCQueryProposal)
+description of the live patch over HTTP (port 7772). TouchOSC and Open Stage
+Control read it and build a labelled, correctly-ranged fader for every parameter
+— nothing mapped by hand. Turn a fader on your phone, the knob moves in Rack.
 
 ```bash
-# See the whole patch as an OSC namespace (plain HTTP, no dependencies):
-curl http://127.0.0.1:7772/
+curl http://127.0.0.1:7772/     # the whole patch as an OSC namespace
 ```
 
 ## What you can do
@@ -44,11 +39,10 @@ channel to an address and voltages flow. vcv-osc is different in kind: it
 controls the patch's **structure** — any parameter, cable or module — addressed
 by **stable name** and **auto-discoverable** over OSCQuery.
 
-That makes it the only way to drive a Rack patch *structurally* from the OSC
-ecosystem (TouchOSC, Open Stage Control, Max, hardware, sequencers) with no code
-and no per-knob mapping. Names come from the patch itself, so a mapping built
-once keeps working after a reload — the one axis where vcv-osc is strictly more
-robust than id-only control surfaces.
+That is a different job from the CV-only OSC modules: it drives the patch's
+*structure* from the OSC ecosystem (TouchOSC, Open Stage Control, Max, hardware,
+sequencers) with no code and no per-knob mapping. Names come from the patch
+itself, so a mapping built once still resolves after a reload.
 
 ---
 
