@@ -1,95 +1,117 @@
-# vcv-osc — OSC control for VCV Rack 2
+# vcv-osc — control your whole VCV Rack patch over OSC
 
-A [VCV Rack 2](https://vcvrack.com) plugin that exposes the **whole patch** to
-an external OSC client. Drop the **OSC Controller** module into any patch and
-you can, from Python / [osc-bridge](https://github.com/roomi-fields/osc-bridge)
-/ Max / a shell script:
+[![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-blue.svg)](LICENSE)
+[![Latest release](https://img.shields.io/github/v/release/roomi-fields/vcv-osc)](https://github.com/roomi-fields/vcv-osc/releases)
+[![VCV Library](https://img.shields.io/badge/VCV%20Library-submitted-orange.svg)](https://github.com/VCVRack/library/issues/938)
+
+> Drop the **OSC Controller** module into any patch and drive the *entire* patch
+> from TouchOSC, Open Stage Control, Max, a Python script, or
+> [osc-bridge](https://github.com/roomi-fields/osc-bridge) — every knob, cable
+> and module, addressed **by name**, with the whole surface **auto-discovered**.
+
+<!-- Hero GIF goes here. Record "point TouchOSC at Rack → faders build themselves"
+     and drop it at docs/demo.gif, then uncomment:
+![vcv-osc auto-builds a TouchOSC control surface via OSCQuery](docs/demo.gif)
+-->
+
+## The 30-second wow: a control surface that builds itself
+
+vcv-osc serves an [**OSCQuery**](https://github.com/Vidvox/OSCQueryProposal)
+description of your live patch over HTTP. Point **TouchOSC** or **Open Stage
+Control** at `http://<rack-host>:7772/` and **every parameter of every module
+appears as a labelled, correctly-ranged fader — no manual mapping.** Turn a
+fader on your phone, the knob moves in Rack.
+
+```bash
+# See the whole patch as an OSC namespace (plain HTTP, no dependencies):
+curl http://127.0.0.1:7772/
+```
+
+## What you can do
 
 - **set / get any parameter** of any module (knobs, buttons, switches), by
-  numeric id **or by name** (`"Fundamental/VCO"` / `"Frequency"`);
+  numeric id **or by name** (`"Fundamental/VCO"` · `"Frequency"`);
 - **add / remove cables** between any two ports;
-- **add / remove modules** and load / save their presets;
-- **dump the full patch state** (modules, params, cables, named I/O);
+- **add / remove modules** (by slug *or* human name/brand) and load / save presets;
+- **dump the full patch state** — modules, params, cables, named I/O;
 - **subscribe** to parameter *and* structural (module/cable) changes;
-- **auto-build a control surface** in TouchOSC / Open Stage Control via a served
-  [OSCQuery](https://github.com/Vidvox/OSCQueryProposal) namespace.
+- **auto-build a control surface** in TouchOSC / Open Stage Control via OSCQuery.
 
-It is **wire-compatible with osc-bridge's passthrough surface**: the bridge
-strips its `/vcv` prefix and forwards to UDP 7770, replies come back on 7771 —
-exactly the ports this module uses by default.
+## Why vcv-osc
 
----
+Rack already has OSC modules — but they bridge **signal**: you pre-wire a CV
+channel to an address and voltages flow. vcv-osc is different in kind: it
+controls the patch's **structure** — any parameter, cable or module — addressed
+by **stable name** and **auto-discoverable** over OSCQuery.
 
-## Why a module (and not an "API")
-
-VCV Rack has no official external control API. The only way in is a plugin
-loaded *inside Rack's process* that opens an OSC server and translates messages
-into calls to Rack's internal APIs. That is what this module is.
-
-Two very different reliability tiers, kept strictly separated in the code:
-
-| Feature  | Rack API used                     | Stability |
-|----------|-----------------------------------|-----------|
-| Params / state dump / OSCQuery | `engine::Engine` (`setParamValue`/`getParamValue`, `getModule`, `getModuleIds`) | **Public, stable.** |
-| Cables   | `app::RackWidget` / `CableWidget` / `PortWidget` | **Unofficial, may break between Rack versions.** |
-| Module add/remove, presets | `app::RackWidget` / `ModuleWidget` / `plugin::getModel` | **Unofficial, may break between Rack versions.** |
-
-The fragile app-layer code is quarantined in the `applyCable*` and `applyModule*`
-/ `applyPreset*` methods of `src/OscController.cpp`, whose logic follows Rack
-2.6.1's own source. If a future Rack breaks it, that is the one place to fix; the
-stable engine features (params, dump, OSCQuery, watch) keep working regardless.
-See [§ Fragility](#fragility-of-the-cable-api).
+That makes it the only way to drive a Rack patch *structurally* from the OSC
+ecosystem (TouchOSC, Open Stage Control, Max, hardware, sequencers) with no code
+and no per-knob mapping. Names come from the patch itself, so a mapping built
+once keeps working after a reload — the one axis where vcv-osc is strictly more
+robust than id-only control surfaces.
 
 ---
 
-## Architecture
+## Install
 
-Four separated layers, as the threading model demands:
+**From the VCV Library** (recommended, once the
+[submission](https://github.com/VCVRack/library/issues/938) is accepted): search
+"OSC" in Rack's module browser and click *Add*. That's it.
 
-```
- network thread                         UI thread (ModuleWidget::step)
-┌────────────────┐   thread-safe    ┌──────────────────────────────────┐
-│  OscServer     │   CommandQueue   │  OscController::processPending()  │
-│  recvfrom loop │ ───────────────► │   ├─ params  → engine API         │
-│  parse packet  │   (mutex deque)  │   ├─ cables  → app/UI API  ⚠      │
-└────────────────┘                  │   ├─ dump    → engine API         │
-        ▲                           │   └─ replies → OscSender ─┐       │
-        │ UDP 7770 (listen)         └───────────────────────────┼───────┘
-   OSC client / osc-bridge                UDP 7771 (reply) ◄─────┘
+**From a release:** download the `.vcvplugin` for your OS from the
+[Releases page](https://github.com/roomi-fields/vcv-osc/releases) and double-click
+it (or drop it in Rack's user plugin folder). **Or build it yourself** — see
+[Build](#build).
+
+## Quick start
+
+```bash
+pip install python-osc
+
+# 1. Discover the patch (module ids, param labels, port names):
+python client/vcv_osc_client.py dump
+
+# 2. Drive it — by id or by name:
+python client/vcv_osc_client.py set "Fundamental/VCO" "Frequency" 0.5
+python client/vcv_osc_client.py cable-add "VCO" "Sine" "VCF" "Audio"
+python client/vcv_osc_client.py module-add "Audible Instruments" "Braids"
+python client/vcv_osc_client.py watch  12 0            # stream a knob's changes
+python client/vcv_osc_client.py oscquery               # print the OSCQuery tree
 ```
 
-- **`src/osc/OscServer.{hpp,cpp}`** — owns a UDP socket + a background thread
-  that blocks on `recvfrom()`, parses each datagram (message *or* `#bundle`)
-  and pushes the result onto the queue. It **never touches Rack**.
-- **`src/osc/CommandQueue.hpp`** — a mutex-guarded deque handing messages from
-  the network thread to the UI thread.
-- **`OscController::processPending()`** — drained every frame from
-  `OscControllerWidget::step()` (the UI thread). **Cables are only ever created
-  or removed here**, because touching them off the UI thread crashes Rack.
-- **`src/osc/OscSender.hpp`** + **`OscMessage.hpp`** — a send-only socket and a
-  dependency-free OSC 1.0 codec (int32 / float32 / string, plus bundle
-  unpacking). No oscpack / liblo needed.
-- **`src/osc/HttpServer.{hpp,cpp}`** — a minimal HTTP server on its own thread,
-  serving the OSCQuery namespace. It only reads a cached JSON string that the UI
-  thread rebuilds; it **never touches Rack** directly.
+1. Add **OSC Controller** to your patch (search "OSC"). Its display shows the
+   listen status, reply target, the OSCQuery status and a message counter.
+   Right-click to change ports or toggle OSCQuery.
+2. `dump` to discover ids/names, then drive it with the commands above.
 
-### Threading, explicitly
+See `client/vcv_osc_client.py --help` for every command and the
+`--host/--port/--reply/--oscquery-port` options.
 
-The audio thread (`process()`) does nothing but decay the two activity LEDs.
-The network and HTTP threads only read/enqueue. All engine and app reads/writes
-happen on the UI thread — the OSCQuery JSON is built there and handed to the HTTP
-thread as a string behind a mutex. The receive loop uses a 200 ms socket timeout to poll its stop flag,
-because closing a socket does **not** reliably interrupt a blocked `recvfrom()`
-on Linux — without that, removing the module would hang Rack. (Found and fixed
-via the end-to-end test in `test/`.)
+### Driving it through osc-bridge
+
+The module is registered as
+[osc-bridge](https://github.com/roomi-fields/osc-bridge)'s VCV Rack passthrough
+target (`devices/vcv-rack/…`). Point osc-bridge at it and prefix addresses with
+`/vcv`:
+
+```bash
+osc-bridge run --device devices/vcv-rack/vcv-rack.third-party-osc.fw-2.5.json
+osc-bridge osc-send /vcv/param/set 12 0 0.8
+osc-bridge osc-send /vcv/state/dump 1
+```
+
+osc-bridge strips `/vcv`, forwards to UDP 7770, and re-prefixes replies coming
+back on 7771 — exactly the ports this module uses by default.
 
 ---
+
+# Reference
 
 ## OSC address scheme
 
-Addresses arrive **without** the `/vcv` prefix (osc-bridge strips it; if you
-talk to the module directly you may include `/vcv` and it will be tolerated).
-Replies are sent to the reply host:port (default `127.0.0.1:7771`).
+Addresses arrive **without** the `/vcv` prefix (osc-bridge strips it; if you talk
+to the module directly you may include `/vcv` and it will be tolerated). Replies
+are sent to the reply host:port (default `127.0.0.1:7771`).
 
 ### Incoming (client → module)
 
@@ -141,15 +163,15 @@ Every `moduleId` / `paramId` / `portId` above accepts **either** a numeric id
 | `/error`        | `message:string` |
 
 Module and port ids come from `/state/dump`. The OSC Controller module itself
-appears in the dump like any other module. The `/event/*` messages are only
-sent after `/state/watch 1`.
+appears in the dump like any other module. The `/event/*` messages are only sent
+after `/state/watch 1`.
 
 ### Symbolic addressing
 
-Numeric ids are canonical but fragile: they only stay valid as long as the
-patch is not rebuilt, and they are unreadable in a performance mapping. So
-**anywhere an id is expected you may send a name string instead** (the module
-branches on the OSC argument *type* — an `int` is an id, a `string` is a name):
+Numeric ids are canonical but fragile: they only stay valid as long as the patch
+is not rebuilt, and they are unreadable in a performance mapping. So **anywhere
+an id is expected you may send a name string instead** (the module branches on
+the OSC argument *type* — an `int` is an id, a `string` is a name):
 
 | Ref | String form | Example |
 |---|---|---|
@@ -158,28 +180,21 @@ branches on the OSC argument *type* — an `int` is an id, a `string` is a name)
 | Port   | the **port name**, case-insensitive | `"Sine"`, `"Pitch"` |
 
 Module matching is by slug (exact) **or** human name/brand (case-insensitive) —
-so `"Audible Instruments/Braids"` works as well as the slug `"AudibleInstruments/Braids"`.
-A name that matches nothing, or an ambiguous one, returns an `/error` (with the
-candidate slugs when ambiguous).
-
-```bash
-python client/vcv_osc_client.py set "Fundamental/VCO" "Frequency" 0.5
-python client/vcv_osc_client.py cable-add "VCO" "Sine" "VCF" "Audio"
-```
+so `"Audible Instruments/Braids"` works as well as the slug
+`"AudibleInstruments/Braids"`. A name that matches nothing, or an ambiguous one,
+returns an `/error` (with the candidate slugs when ambiguous).
 
 Names come straight from `/state/dump` (`modelSlug`, param `label`, port
 `name`), so a client can discover them once and then address by name forever.
-This is the one axis where vcv-osc is strictly more robust than id-only control
-surfaces.
 
 ### OSCQuery discovery (auto-build a control surface)
 
-The module also serves an [**OSCQuery**](https://github.com/Vidvox/OSCQueryProposal)
+The module serves an [**OSCQuery**](https://github.com/Vidvox/OSCQueryProposal)
 namespace over HTTP (default port **7772**). OSCQuery is the standard by which a
 controller — **TouchOSC**, **Open Stage Control**, Vezér, Max — discovers an OSC
 device and auto-generates a labelled, correctly-ranged surface. Point it at
-`http://<rack-host>:7772/` and every module parameter appears as a fader with
-its real name and range — no manual mapping.
+`http://<rack-host>:7772/` and every module parameter appears as a fader with its
+real name and range — no manual mapping.
 
 The namespace exposes each param as a read/write leaf:
 
@@ -195,8 +210,8 @@ GET http://127.0.0.1:7772/param/12    → just module 12's params
 
 Those leaf addresses are also live **OSC** addresses: send a float to
 `/param/12/0` (UDP 7770) to set that param — the RESTful form OSCQuery clients
-use, alongside the verb form `/param/set 12 0 <value>`. Inspect the tree from
-the shell:
+use, alongside the verb form `/param/set 12 0 <value>`. Inspect the tree from the
+shell:
 
 ```bash
 python client/vcv_osc_client.py oscquery         # print the namespace + HOST_INFO
@@ -209,22 +224,83 @@ Enable/disable it and pick the port from the module's right-click menu.
 
 VCV ports carry no signal *type* (gate / CV / audio) — every port is the same
 ±10 V polyphonic voltage. A port's meaning lives entirely in its **name** and
-**description**, which `/state/input` and `/state/output` expose (the
-description is the module author's "comment"). Parameters likewise expose
-`label`, `unit` and `description`.
+**description**, which `/state/input` and `/state/output` expose (the description
+is the module author's "comment"). Parameters likewise expose `label`, `unit` and
+`description`.
 
 There is **no static catalogue** of every module's I/O: a module's ports and
 params only exist once it is instantiated. `/registry/dump` lists every
 *installed* module at the module level (slug, name, one-line description);
-`/state/dump` gives the full per-port / per-param detail for the modules
-actually in the open patch.
+`/state/dump` gives the full per-port / per-param detail for the modules actually
+in the open patch.
+
+---
+
+## How it works
+
+### Why a module (and not an "API")
+
+VCV Rack has no official external control API. The only way in is a plugin loaded
+*inside Rack's process* that opens an OSC server and translates messages into
+calls to Rack's internal APIs. That is what this module is.
+
+Two very different reliability tiers, kept strictly separated in the code:
+
+| Feature  | Rack API used                     | Stability |
+|----------|-----------------------------------|-----------|
+| Params / state dump / OSCQuery | `engine::Engine` (`setParamValue`/`getParamValue`, `getModule`, `getModuleIds`) | **Public, stable.** |
+| Cables   | `app::RackWidget` / `CableWidget` / `PortWidget` | **Unofficial, may break between Rack versions.** |
+| Module add/remove, presets | `app::RackWidget` / `ModuleWidget` / `plugin::getModel` | **Unofficial, may break between Rack versions.** |
+
+The fragile app-layer code is quarantined in the `applyCable*` and `applyModule*`
+/ `applyPreset*` methods of `src/OscController.cpp`, whose logic follows Rack
+2.6.1's own source. If a future Rack breaks it, that is the one place to fix; the
+stable engine features (params, dump, OSCQuery, watch) keep working regardless.
+See [§ Fragility](#fragility-of-the-cable-api).
+
+### Architecture
+
+```
+ network thread                         UI thread (ModuleWidget::step)
+┌────────────────┐   thread-safe    ┌──────────────────────────────────┐
+│  OscServer     │   CommandQueue   │  OscController::processPending()  │
+│  recvfrom loop │ ───────────────► │   ├─ params  → engine API         │
+│  parse packet  │   (mutex deque)  │   ├─ cables  → app/UI API  ⚠      │
+└────────────────┘                  │   ├─ dump    → engine API         │
+        ▲                           │   └─ replies → OscSender ─┐       │
+        │ UDP 7770 (listen)         └───────────────────────────┼───────┘
+   OSC client / osc-bridge                UDP 7771 (reply) ◄─────┘
+```
+
+- **`src/osc/OscServer.{hpp,cpp}`** — owns a UDP socket + a background thread that
+  blocks on `recvfrom()`, parses each datagram (message *or* `#bundle`) and pushes
+  the result onto the queue. It **never touches Rack**.
+- **`src/osc/CommandQueue.hpp`** — a mutex-guarded deque handing messages from the
+  network thread to the UI thread.
+- **`OscController::processPending()`** — drained every frame from
+  `OscControllerWidget::step()` (the UI thread). **Cables are only ever created or
+  removed here**, because touching them off the UI thread crashes Rack.
+- **`src/osc/OscSender.hpp`** + **`OscMessage.hpp`** — a send-only socket and a
+  dependency-free OSC 1.0 codec (int32 / float32 / string, plus bundle unpacking).
+  No oscpack / liblo needed.
+- **`src/osc/HttpServer.{hpp,cpp}`** — a minimal HTTP server on its own thread,
+  serving the OSCQuery namespace. It only reads a cached JSON string that the UI
+  thread rebuilds; it **never touches Rack** directly.
+
+The audio thread (`process()`) does nothing but decay the two activity LEDs. The
+network and HTTP threads only read/enqueue. All engine and app reads/writes happen
+on the UI thread — the OSCQuery JSON is built there and handed to the HTTP thread
+as a string behind a mutex. The receive loop uses a 200 ms socket timeout to poll
+its stop flag, because closing a socket does **not** reliably interrupt a blocked
+`recvfrom()` on Linux — without that, removing the module would hang Rack. (Found
+and fixed via the end-to-end test in `test/`.)
 
 ---
 
 ## Build
 
-Requires the [Rack SDK](https://vcvrack.com/downloads) 2.x for your target OS
-and a C++ toolchain. Set `RACK_DIR` to the SDK.
+Requires the [Rack SDK](https://vcvrack.com/downloads) 2.x for your target OS and
+a C++ toolchain. Set `RACK_DIR` to the SDK.
 
 ```bash
 # Linux (native) / macOS (native)
@@ -243,10 +319,9 @@ make RACK_DIR=/path/to/Rack-SDK CC=x86_64-w64-mingw32-gcc CXX=x86_64-w64-mingw32
 ```
 
 Output is `plugin.{so,dylib,dll}`. `make dist` produces a `.vcvplugin` package.
-
 The target platform (lin/mac/win) is auto-detected from the compiler; the only
-platform-specific code is the UDP socket wrapper (`src/osc/UdpSocket.cpp`),
-which uses Winsock on Windows and BSD sockets elsewhere.
+platform-specific code is the socket wrappers (`src/osc/UdpSocket.cpp`,
+`HttpServer.cpp`), which use Winsock on Windows and BSD sockets elsewhere.
 
 ### Install manually
 
@@ -258,73 +333,29 @@ Copy the built plugin folder into your Rack user directory:
 
 `make install` does this for you.
 
----
-
-## Use
-
-1. Add **OSC Controller** to your patch (search "OSC" in the module browser).
-   Its display shows the listen status, reply target and a message counter.
-   Right-click to change the listen/reply ports.
-2. From a client, dump the patch to discover module and port ids:
-
-```bash
-pip install python-osc
-python client/vcv_osc_client.py dump
-```
-
-3. Then drive it:
-
-```bash
-python client/vcv_osc_client.py set 12 0 0.8           # knob param 0 of module 12
-python client/vcv_osc_client.py press 12 3             # momentary button
-python client/vcv_osc_client.py cable-add 12 0 15 1    # out(mod12,port0) → in(mod15,port1)
-python client/vcv_osc_client.py cable-remove 15 1
-python client/vcv_osc_client.py watch 12 0             # stream knob changes
-python client/vcv_osc_client.py demo 12 0              # scripted showcase
-```
-
-See `client/vcv_osc_client.py --help` for all commands and the `--host/--port/
---reply` options.
-
-### Driving it through osc-bridge
-
-The module is registered as osc-bridge's VCV Rack passthrough target
-(`devices/vcv-rack/…`). Point osc-bridge at it and prefix addresses with `/vcv`:
-
-```bash
-osc-bridge run --device devices/vcv-rack/vcv-rack.third-party-osc.fw-2.5.json
-osc-bridge osc-send /vcv/param/set 12 0 0.8
-osc-bridge osc-send /vcv/state/dump 1
-```
-
-osc-bridge strips `/vcv`, forwards to UDP 7770, and re-prefixes replies coming
-back on 7771.
-
----
-
 ## Test
 
-An end-to-end test of the OSC layer (no Rack required) compiles the networking
-code into a standalone server and drives it from python-osc, proving the wire
-format matches:
+Two end-to-end tests, neither of which needs Rack:
 
 ```bash
 pip install python-osc
-bash test/run.sh          # prints RESULT: PASS
+bash test/run.sh          # OSC wire layer, driven from python-osc → RESULT: PASS
+bash test/run_http.sh     # OSCQuery HTTP transport (curl)         → RESULT: PASS
 ```
 
----
+They compile the networking code into standalone servers and drive them from
+python-osc / curl, proving the wire format and the HTTP transport match.
 
 ## Security
 
-This module is an **unauthenticated remote-control surface**. Anyone who can
-reach its ports can drive the patch. Specifically:
+This module is an **unauthenticated remote-control surface**. Anyone who can reach
+its ports can drive the patch. Specifically:
 
-- The OSC server (UDP 7770) and the OSCQuery HTTP server (TCP 7772) bind on
-  **all interfaces** — deliberately, so a phone/tablet running TouchOSC can
-  reach Rack over the LAN. There is no password.
-- `/module/preset_load` and `/module/preset_save` **read and write files by
-  path** on the machine running Rack.
+- The OSC server (UDP 7770) and the OSCQuery HTTP server (TCP 7772) bind on **all
+  interfaces** — deliberately, so a phone/tablet running TouchOSC can reach Rack
+  over the LAN. There is no password.
+- `/module/preset_load` and `/module/preset_save` **read and write files by path**
+  on the machine running Rack.
 
 This is fine on `localhost` or a trusted studio LAN (the intended use). On an
 untrusted network, firewall ports 7770/7772 or simply don't add the module.
@@ -332,9 +363,9 @@ Everything is off when no OSC Controller module is in the patch.
 
 ## Fragility of the cable API
 
-**The cable feature relies on Rack's app/UI layer, which is explicitly not part
-of the stable plugin ABI.** VCV documents that filenames and symbol locations
-can change in any Rack version. Concretely, this plugin depends on:
+**The cable feature relies on Rack's app/UI layer, which is explicitly not part of
+the stable plugin ABI.** VCV documents that filenames and symbol locations can
+change in any Rack version. Concretely, this plugin depends on:
 
 - `APP->scene->rack` being an `app::RackWidget` with `getModule`, `addCable`,
   `removeCable`, `getTopCable`, `getCompleteCablesOnPort`, `getNextCableColor`;
@@ -342,13 +373,13 @@ can change in any Rack version. Concretely, this plugin depends on:
 - `app::ModuleWidget::getInput/getOutput(portId)`;
 - `history::CableAdd` / `history::CableRemove` for undo integration.
 
-All of this was verified against **Rack SDK 2.6.1** and mirrors Rack's own
-source. Between the mission's original snippet (`cw->setInput(...)`) and 2.6.1
-the API already changed to `updateCable()`/`setCable()` — a reminder that this
-*will* drift. Parameters, by contrast, use the stable engine API and are safe.
+All of this was verified against **Rack SDK 2.6.1** and mirrors Rack's own source.
+Between the mission's original snippet (`cw->setInput(...)`) and 2.6.1 the API
+already changed to `updateCable()`/`setCable()` — a reminder that this *will*
+drift. Parameters, by contrast, use the stable engine API and are safe.
 
 If Rack breaks the cable API, params, get/set, dump and watch keep working; only
-`applyCableAdd/Remove/RemoveId` need updating.
+the `applyCable*` / `applyModule*` methods need updating.
 
 ## License
 
