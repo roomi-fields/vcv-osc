@@ -101,7 +101,7 @@ Replies are sent to the reply host:port (default `127.0.0.1:7771`).
 | `/cable/add`    | `outMod:int outPort:int inMod:int inPort:int` | Add a cable. → `/cable/added` or `/error`. |
 | `/cable/remove` | `inMod:int inPort:int`                 | Remove the cable feeding that input. → `/cable/removed`. |
 | `/cable/remove_id` | `cableId:int`                       | Remove a cable by id. |
-| `/module/add`   | `pluginSlug:str modelSlug:str [x:float y:float]` | Instantiate a module. → `/module/added`. |
+| `/module/add`   | `plugin:str model:str [x:float y:float]` | Instantiate a module (plugin/model by slug **or** name). → `/module/added`. |
 | `/module/remove`| `module`                                | Delete a module (and its cables). → `/module/removed`. |
 | `/module/preset_save` | `module path:str`                 | Save the module's preset to a file. |
 | `/module/preset_load` | `module path:str`                 | Load a preset file into the module (undoable). |
@@ -153,9 +153,14 @@ branches on the OSC argument *type* — an `int` is an id, a `string` is a name)
 
 | Ref | String form | Example |
 |---|---|---|
-| Module | `modelSlug` or `pluginSlug/modelSlug`, optional `:N` for the Nth instance | `"VCO"`, `"Fundamental/VCO"`, `"VCO:1"` |
+| Module | model **slug or name**, optional `brand/` prefix (brand **slug or name**) and `:N` for the Nth instance | `"VCO"`, `"Fundamental/VCO"`, `"Audible Instruments/Braids"`, `"VCO:1"` |
 | Param  | the knob **label**, case-insensitive (exact, else first substring) | `"Frequency"` |
 | Port   | the **port name**, case-insensitive | `"Sine"`, `"Pitch"` |
+
+Module matching is by slug (exact) **or** human name/brand (case-insensitive) —
+so `"Audible Instruments/Braids"` works as well as the slug `"AudibleInstruments/Braids"`.
+A name that matches nothing, or an ambiguous one, returns an `/error` (with the
+candidate slugs when ambiguous).
 
 ```bash
 python client/vcv_osc_client.py set "Fundamental/VCO" "Frequency" 0.5

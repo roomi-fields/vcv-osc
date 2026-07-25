@@ -255,6 +255,9 @@ struct OscController : Module {
 		for (char& c : s) c = (char) std::tolower((unsigned char) c);
 		return s;
 	}
+	static bool ciEq(const std::string& a, const std::string& b) {
+		return toLower(a) == toLower(b);
+	}
 
 	// Resolve a module argument (int id or symbolic string) → engine module id,
 	// or -1 with `err` set.
@@ -291,9 +294,15 @@ struct OscController : Module {
 			engine::Module* mod = APP->engine->getModule(id);
 			if (!mod) continue;
 			plugin::Model* model = mod->getModel();
-			if (!model || model->slug != wantModel) continue;
-			if (!wantPlugin.empty() && (!model->plugin || model->plugin->slug != wantPlugin))
-				continue;
+			if (!model) continue;
+			// Match the model by slug (exact) OR human name (case-insensitive),
+			// symmetric with how params/ports match their label.
+			if (model->slug != wantModel && !ciEq(model->name, wantModel)) continue;
+			if (!wantPlugin.empty()) {
+				plugin::Plugin* pl = model->plugin;
+				if (!pl || (pl->slug != wantPlugin && !ciEq(pl->name, wantPlugin)))
+					continue;
+			}
 			hits.push_back(id);
 		}
 		if (hits.empty()) {
@@ -640,17 +649,53 @@ struct OscController : Module {
 	//           (which also adds it to the engine) → position → history::ModuleAdd
 	//   remove: strip every cable on the module FIRST (engine::removeModule asserts
 	//           none remain) → history::ModuleRemove → rack->removeModule → delete
+	// Resolve a module to *create* — it has no live instance yet, so we match
+	// against the installed-module registry, symmetric with resolveModule: slug
+	// (exact) OR human name / brand (case-insensitive). Ambiguity is an error
+	// listing the candidate slugs (as the :N index disambiguates instances).
+	plugin::Model* resolveModel(const std::string& pluginRef, const std::string& modelRef,
+	                            std::string& err) {
+		// Fast, canonical path: exact slugs (also handles renamed-plugin fallbacks
+		// consistently with the rest of Rack).
+		if (plugin::Model* m = plugin::getModel(pluginRef, modelRef))
+			return m;
+
+		std::vector<plugin::Model*> hits;
+		for (plugin::Plugin* p : plugin::plugins) {
+			if (!p) continue;
+			if (p->slug != pluginRef && !ciEq(p->name, pluginRef)) continue;
+			for (plugin::Model* model : p->models) {
+				if (!model || model->hidden) continue;
+				if (model->slug == modelRef || ciEq(model->name, modelRef))
+					hits.push_back(model);
+			}
+		}
+		if (hits.empty()) {
+			err = "no such module: " + pluginRef + " / " + modelRef;
+			return nullptr;
+		}
+		if (hits.size() > 1) {
+			std::string cands;
+			for (plugin::Model* m : hits) {
+				if (!cands.empty()) cands += ", ";
+				cands += (m->plugin ? m->plugin->slug : "?") + std::string("/") + m->slug;
+			}
+			err = "ambiguous module '" + pluginRef + "/" + modelRef + "': " + cands;
+			return nullptr;
+		}
+		return hits[0];
+	}
+
 	void applyModuleAdd(const OscMessage& m) {
 		if (m.args.size() < 2)
-			return sendError("/module/add needs <pluginSlug> <modelSlug> [x] [y]");
+			return sendError("/module/add needs <plugin> <model> [x] [y]");
 		if (m.args[0].type != OscArg::STRING || m.args[1].type != OscArg::STRING)
-			return sendError("/module/add: pluginSlug and modelSlug must be strings");
-		std::string pluginSlug = m.args[0].s;
-		std::string modelSlug = m.args[1].s;
+			return sendError("/module/add: plugin and model must be strings (slug or name)");
 
-		plugin::Model* model = plugin::getModel(pluginSlug, modelSlug);
+		std::string err;
+		plugin::Model* model = resolveModel(m.args[0].s, m.args[1].s, err);
 		if (!model)
-			return sendError("no such module: " + pluginSlug + "/" + modelSlug);
+			return sendError(err);
 
 		engine::Module* module = model->createModule();
 		if (!module) return sendError("createModule failed");
@@ -673,8 +718,10 @@ struct OscController : Module {
 		int64_t id = mw->module ? mw->module->id : -1;
 		OscMessage out("/module/added");
 		out.pushInt((int32_t) id);
-		out.pushString(pluginSlug);
-		out.pushString(modelSlug);
+		// Echo the *canonical* slugs of the resolved model, so a client that added
+		// by human name learns the stable ids.
+		out.pushString(model->plugin ? model->plugin->slug : "");
+		out.pushString(model->slug);
 		reply(out);
 	}
 
